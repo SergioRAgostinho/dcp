@@ -78,6 +78,10 @@ def test_one_epoch(args, net, test_loader):
         rotation_ba = rotation_ba.cuda()
         translation_ba = translation_ba.cuda()
 
+        if args.gaussian_spoonful:
+            noise = torch.clamp(0.01*torch.randn_like(src), -.05, .05)
+            src += noise
+
         batch_size = src.size(0)
         num_examples += batch_size
         rotation_ab_pred, translation_ab_pred, rotation_ba_pred, translation_ba_pred = net(src, target)
@@ -560,6 +564,8 @@ def main():
                         help='Whether to use cycle consistency')
     parser.add_argument('--gaussian_noise', type=bool, default=False, metavar='N',
                         help='Wheter to add gaussian noise')
+    parser.add_argument('--gaussian_spoonful', type=bool, default=False, metavar='N',
+                        help='Wheter to add independent gaussian noise to only one point cloud as in the paper Just a Spoonful...')
     parser.add_argument('--unseen', type=bool, default=False, metavar='N',
                         help='Wheter to test on unseen category')
     parser.add_argument('--num_points', type=int, default=1024, metavar='N',
