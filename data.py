@@ -18,12 +18,17 @@ def download():
     DATA_DIR = os.path.join(BASE_DIR, 'data')
     if not os.path.exists(DATA_DIR):
         os.mkdir(DATA_DIR)
-    if not os.path.exists(os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048')):
-        www = 'https://shapenet.cs.stanford.edu/media/modelnet40_ply_hdf5_2048.zip'
-        zipfile = os.path.basename(www)
-        os.system('wget %s --no-check-certificate; unzip %s' % (www, zipfile))
-        os.system('mv %s %s' % (zipfile[:-4], DATA_DIR))
-        os.system('rm %s' % (zipfile))
+
+    datasets = [
+        ('modelnet40_ply_hdf5_2048', 'https://shapenet.cs.stanford.edu/media/modelnet40_ply_hdf5_2048.zip'),
+        ('3dmatch', 'http://web.tecnico.ulisboa.pt/sergio.agostinho/share/just-a-spoonful/3dmatch.zip'),
+    ]
+    for folder, www in datasets:
+        if not os.path.exists(os.path.join(DATA_DIR, folder)):
+            zipfile = os.path.basename(www)
+            os.system('wget %s --no-check-certificate; unzip %s' % (www, zipfile))
+            os.system('mv %s %s' % (zipfile[:-4], DATA_DIR))
+            os.system('rm %s' % (zipfile))
 
 
 def load_data(partition, prefix=None):
@@ -161,6 +166,9 @@ class ThreeDMatch(Dataset):
             msg = f"Accepted minimum_overlap values are the following: {self.overlap_options}"
             raise ValueError(msg)
 
+        # Check and download data if needed
+        download()
+
         # use stage information to populate list of files belonging to the split
         scenes = self._parse_scenes(partition)
 
@@ -179,7 +187,7 @@ class ThreeDMatch(Dataset):
 
     def _parse_sequences(self, scenes, minimum_overlap):
 
-        path = os.path.join(self.prefix, "pointclouds")
+        path = os.path.join(self.prefix, "preprocessed")
         pattern = "@seq-[0-9][0-9].txt" if minimum_overlap is None else f"@seq-[0-9][0-9]-{minimum_overlap:0.2f}.txt"
 
         pairs = []
