@@ -516,7 +516,7 @@ def train(args, net, train_loader, test_loader, boardio, textio):
         gc.collect()
 
 
-def main():
+def generate_argument_parser():
     parser = argparse.ArgumentParser(description='Point Cloud Registration')
     parser.add_argument('--exp_name', type=str, default='exp', metavar='N',
                         help='Name of the experiment')
@@ -576,30 +576,64 @@ def main():
                         help='Divided factor for rotations')
     parser.add_argument('--model_path', type=str, default='', metavar='N',
                         help='Pretrained model path')
+    return parser
 
-    args = parser.parse_args()
+def enable_determinism(seed):
     torch.backends.cudnn.deterministic = True
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    np.random.seed(args.seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
 
+def init_text_logger(args):
+    exp_dir = os.path.join('checkpoints', args.exp_name)
+    os.makedirs(exp_dir, exist_ok=True)
+    textio = IOStream(os.path.join(exp_dir, 'run.log'))
+    textio.cprint(str(args))
+    return textio
+
+def init_loggers(args):
     boardio = SummaryWriter(log_dir='checkpoints/' + args.exp_name)
     _init_(args)
 
-    textio = IOStream('checkpoints/' + args.exp_name + '/run.log')
-    textio.cprint(str(args))
+    textio = init_text_logger(args)
+    return boardio, textio
 
-    if args.dataset == 'modelnet40':
-        train_loader = DataLoader(
-            ModelNet40(num_points=args.num_points, partition='train', gaussian_noise=args.gaussian_noise,
-                       unseen=args.unseen, factor=args.factor),
-            batch_size=args.batch_size, shuffle=True, drop_last=True)
-        test_loader = DataLoader(
-            ModelNet40(num_points=args.num_points, partition='test', gaussian_noise=args.gaussian_noise,
-                       unseen=args.unseen, factor=args.factor),
-            batch_size=args.test_batch_size, shuffle=False, drop_last=False)
+def init_train_loader(args):
+    return DataLoader(
+        ModelNet40(
+            num_points=args.num_points, partition='train', gaussian_noise=args.gaussian_noise, unseen=args.unseen, factor=args.factor
+        ),
+    batch_size=args.batch_size, shuffle=True, drop_last=True)
+
+def init_test_loader(args):
+    return DataLoader(
+        ModelNet40(
+            num_points=args.num_points, partition='test', gaussian_noise=args.gaussian_noise, unseen=args.unseen, factor=args.factor
+        ),
+    batch_size=args.test_batch_size, shuffle=False, drop_last=False)
+
+def init_dataset(args, split=None):
+    if args.dataset != 'modelnet40':
+        raise NotImplementedError
+
+    if split is None:
+        return init_train_loader(args), init_test_loader(args)
+    elif split == 'train':
+        return init_train_loader(args)
+    elif split == 'test':
+        return init_test_loader(args)
     else:
-        raise Exception("not implemented")
+        raise ValueError("Accepted split values: None, 'train', 'test'")
+
+
+def main():
+
+    parser = generate_argument_parser()
+    args = parser.parse_args()
+    enable_determinism(args.seed)
+    boardio, textio = init_loggers(args)
+
+    train_loader, test_loader = init_dataset(args)
 
     if args.model == 'dcp':
         net = DCP(args).cuda()
