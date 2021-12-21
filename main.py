@@ -6,12 +6,14 @@ from __future__ import print_function
 import os
 import gc
 import argparse
+from posixpath import expanduser
+from warnings import warn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import MultiStepLR
-from data import ModelNet40
+from data import ModelNet40, ThreeDMatch
 from model import DCP
 from util import transform_point_cloud, npmat2euler
 import numpy as np
@@ -570,8 +572,9 @@ def generate_argument_parser():
                         help='Wheter to test on unseen category')
     parser.add_argument('--num_points', type=int, default=1024, metavar='N',
                         help='Num of points to use')
-    parser.add_argument('--dataset', type=str, default='modelnet40', choices=['modelnet40'], metavar='N',
+    parser.add_argument('--dataset', type=str, default='modelnet40', choices=['modelnet40', '3dmatch'], metavar='N',
                         help='dataset to use')
+    parser.add_argument("--dataset_prefix", type=expanduser, help="Specify dataset prefix. Useful for 3DMatch")
     parser.add_argument('--factor', type=float, default=4, metavar='N',
                         help='Divided factor for rotations')
     parser.add_argument('--model_path', type=str, default='', metavar='N',
@@ -598,30 +601,31 @@ def init_loggers(args):
     textio = init_text_logger(args)
     return boardio, textio
 
-def init_train_loader(args):
-    return DataLoader(
-        ModelNet40(
-            num_points=args.num_points, partition='train', gaussian_noise=args.gaussian_noise, unseen=args.unseen, factor=args.factor
-        ),
-    batch_size=args.batch_size, shuffle=True, drop_last=True)
+def init_modelnet40(args, split):
+    if split == "val":
+        split == "test"
+        warn("ModelNet40 doesn't have a validation split. Setting it to the `test` split")
+    return ModelNet40(num_points=args.num_points, partition=split, gaussian_noise=args.gaussian_noise, unseen=args.unseen, factor=args.factor)
 
-def init_test_loader(args):
-    return DataLoader(
-        ModelNet40(
-            num_points=args.num_points, partition='test', gaussian_noise=args.gaussian_noise, unseen=args.unseen, factor=args.factor
-        ),
-    batch_size=args.test_batch_size, shuffle=False, drop_last=False)
+def init_3dmatch(args, split):
+    return ThreeDMatch(prefix=args.dataset_prefix, partition=split, factor=args.factor)
 
 def init_dataset(args, split=None):
-    if args.dataset != 'modelnet40':
+    datasets = {"modelnet40": init_modelnet40, "3dmatch": init_3dmatch}
+    if args.dataset not in datasets:
         raise NotImplementedError
 
+    train_l = lambda args, ds: DataLoader(ds(args, "train"), batch_size=args.batch_size, shuffle=True, drop_last=True)
+    test_l = lambda args, ds: DataLoader(ds(args, "test"), batch_size=args.test_batch_size, shuffle=False, drop_last=False)
+    val_l = lambda args, ds: DataLoader(ds(args, "val"), batch_size=args.test_batch_size, shuffle=False, drop_last=False)
+    ds = datasets[args.dataset]
+
     if split is None:
-        return init_train_loader(args), init_test_loader(args)
+        return train_l(args, ds), val_l(args, ds), test_l(args, ds)
     elif split == 'train':
-        return init_train_loader(args)
+        return train_l(args, ds)
     elif split == 'test':
-        return init_test_loader(args)
+        return test_l(args, ds)
     else:
         raise ValueError("Accepted split values: None, 'train', 'test'")
 
@@ -633,7 +637,7 @@ def main():
     enable_determinism(args.seed)
     boardio, textio = init_loggers(args)
 
-    train_loader, test_loader = init_dataset(args)
+    train_loader, _, test_loader = init_dataset(args)
 
     if args.model == 'dcp':
         net = DCP(args).cuda()

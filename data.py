@@ -26,14 +26,18 @@ def download():
         os.system('rm %s' % (zipfile))
 
 
-def load_data(partition):
-    download()
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    DATA_DIR = os.path.join(BASE_DIR, 'data')
+def load_data(partition, prefix=None):
+    if prefix:
+        DATA_DIR = prefix
+    else:
+        download()
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        DATA_DIR = os.path.join(BASE_DIR, 'data', 'modelnet40_ply_hdf5_2048')
+
     all_data = []
     all_label = []
-    for h5_name in sorted(glob.glob(os.path.join(DATA_DIR, 'modelnet40_ply_hdf5_2048', 'ply_data_%s*.h5' % partition))):
-        f = h5py.File(h5_name)
+    for h5_name in sorted(glob.glob(os.path.join(DATA_DIR, 'ply_data_%s*.h5' % partition))):
+        f = h5py.File(h5_name, mode="r", swmr=True)
         data = f['data'][:].astype('float32')
         label = f['label'][:].astype('int64')
         f.close()
@@ -59,8 +63,8 @@ def jitter_pointcloud(pointcloud, sigma=0.01, clip=0.05):
 
 
 class ModelNet40(Dataset):
-    def __init__(self, num_points, partition='train', gaussian_noise=False, unseen=False, factor=4):
-        self.data, self.label = load_data(partition)
+    def __init__(self, num_points, partition='train', gaussian_noise=False, unseen=False, factor=4, prefix=None):
+        self.data, self.label = load_data(partition, prefix=prefix)
         self.num_points = num_points
         self.partition = partition
         self.gaussian_noise = gaussian_noise
@@ -124,6 +128,106 @@ class ModelNet40(Dataset):
 
     def __len__(self):
         return self.data.shape[0]
+
+
+def generate_random_poses(N, factor):
+    euler_ab = np.random.rand(N, 3) * np.pi / factor
+    euler_ba = -euler_ab[:,::-1]
+
+    rot = Rotation.from_euler("zyx", euler_ab)
+    R_ab = rot.as_matrix()
+    R_ba = R_ab.transpose(0, 2, 1)
+
+    translation_ab = np.random.rand(N, 3) - 0.5
+    translation_ba = - np.squeeze(translation_ab[:, None] @ R_ab, axis=1)
+    return dict(
+        R_ab=R_ab,
+        R_ba=R_ba,
+        translation_ab=translation_ab,
+        translation_ba=translation_ba,
+        euler_ab=euler_ab,
+        euler_ba=euler_ba,
+    )
+
+class ThreeDMatch(Dataset):
+
+    def __init__(self, prefix, partition, minimum_overlap=0.3, factor=4):
+        super().__init__()
+
+        self.prefix = prefix
+        self.overlap_options = set([0.3, 0.5, 0.7])
+
+        if minimum_overlap is not None and minimum_overlap not in self.overlap_options:
+            msg = f"Accepted minimum_overlap values are the following: {self.overlap_options}"
+            raise ValueError(msg)
+
+        # use stage information to populate list of files belonging to the split
+        scenes = self._parse_scenes(partition)
+
+        # retrieve all valid point cloud pairs
+        self.pairs = self._parse_sequences(scenes, minimum_overlap)
+
+        # generate random poses
+        self.poses = generate_random_poses(len(self.pairs), factor)
+
+
+    def _parse_scenes(self, partition):
+        file = os.path.join(self.prefix, "splits", f"{partition}_3dmatch.txt")
+        with open(file) as f:
+            scenes = [line[:-1] for line in f.readlines()]
+        return scenes
+
+    def _parse_sequences(self, scenes, minimum_overlap):
+
+        path = os.path.join(self.prefix, "pointclouds")
+        pattern = "@seq-[0-9][0-9].txt" if minimum_overlap is None else f"@seq-[0-9][0-9]-{minimum_overlap:0.2f}.txt"
+
+        pairs = []
+        for scene in scenes:
+            # sorting to ensure reproduceability across OSes
+            sequences = sorted(list(glob.glob(os.path.join(path, scene + pattern))))
+            for seq in sequences:
+                with open(seq) as f:
+                    pairs += [tuple(line.split()) for line in f.readlines()]
+        return pairs
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, index: int):
+
+        # load both point clouds
+        file0, file1 = self.pairs[index][:2]
+        pointcloud0 = np.load(os.path.join(self.prefix, "preprocessed", file0))["pcd"]
+        pointcloud1 = np.load(os.path.join(self.prefix, "preprocessed", file1))["pcd"]
+
+        # Rescale both point clouds, to lie inside a unit sphere
+        scale = np.max(np.linalg.norm(np.stack([pointcloud0, pointcloud1]), axis=-1))
+        pointcloud0 /= scale
+        pointcloud1 /= scale
+
+        # pose data
+        R_ab = self.poses["R_ab"][index]
+        R_ba = self.poses["R_ba"][index]
+        euler_ab = self.poses["euler_ab"][index]
+        euler_ba = self.poses["euler_ba"][index]
+        translation_ab = self.poses["translation_ab"][index]
+        translation_ba = self.poses["translation_ba"][index]
+
+        # Point cloud data in 3DMatch is perfectly superimposed
+        # apply transformation to target point cloud
+        pointcloud1 = pointcloud1 @ R_ba + translation_ab
+        out = (
+            pointcloud0.T.astype(np.float32),
+            pointcloud1.T.astype(np.float32),
+            R_ab.astype(np.float32),
+            translation_ab.astype(np.float32),
+            R_ba.astype(np.float32),
+            translation_ba.astype(np.float32),
+            euler_ab.astype(np.float32),
+            euler_ba.astype(np.float32),
+        )
+        return out
 
 
 if __name__ == '__main__':
