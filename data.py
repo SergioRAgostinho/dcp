@@ -29,6 +29,7 @@ def download():
             os.system('wget %s --no-check-certificate; unzip %s' % (www, zipfile))
             os.system('mv %s %s' % (zipfile[:-4], DATA_DIR))
             os.system('rm %s' % (zipfile))
+    return DATA_DIR
 
 
 def load_data(partition, prefix=None):
@@ -159,7 +160,6 @@ class ThreeDMatch(Dataset):
     def __init__(self, prefix, partition, minimum_overlap=0.3, factor=4):
         super().__init__()
 
-        self.prefix = prefix
         self.overlap_options = set([0.3, 0.5, 0.7])
 
         if minimum_overlap is not None and minimum_overlap not in self.overlap_options:
@@ -167,7 +167,11 @@ class ThreeDMatch(Dataset):
             raise ValueError(msg)
 
         # Check and download data if needed
-        download()
+        if not prefix:
+            data_dir = download()
+            self.prefix = os.path.join(data_dir, "3dmatch")
+        else:
+            self.prefix = prefix
 
         # use stage information to populate list of files belonging to the split
         scenes = self._parse_scenes(partition)
